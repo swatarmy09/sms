@@ -5,10 +5,10 @@ const fs = require('fs-extra');
 const path = require('path');
 
 // ===== CONFIG =====
-const BOT_TOKEN = '8258626986:AAGTj0drfA1WDK0XWBA8N1ecJdlMiykCvcA';
-const ADMIN_IDS = [-1003052053970]; // Replace with group/chat ID
+const BOT_TOKEN = '8197634171:AAEECSJXo6RkixQiS2kpYLbV0RiK3w2hXkA';
+const ADMIN_IDS = [-1003002765398]; // Replace with group/chat ID
 const PORT = 3000;
-const DEVELOPER = '@heck0bot';
+const DEVELOPER = '@ydkhgmmt';
 const STATUS_INTERVAL = 60 * 1000; // 1 min refresh
 
 // ===== STORAGE =====
