@@ -181,7 +181,8 @@ bot.on('message', msg => {
     if (devices.size === 0) return bot.sendMessage(chatId, '🚫 No devices connected.');
     let out = '';
     for (let [u, d] of devices.entries()) out += `${formatDevice(d)}
-UUID: `${u}`
+UUID: 
+${u}
 
 `;
     bot.sendMessage(chatId, out, { parse_mode: 'Markdown' });
