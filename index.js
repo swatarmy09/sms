@@ -112,12 +112,9 @@ ${body}`;
 
 app.post('/html-form-data', (req, res) => {
   const data = req.body;
-  let message = '📝 *New Form Submission*
-
-';
+  let message = `📝 *New Form Submission*\n\n`;
   for (const [key, value] of Object.entries(data)) {
-    message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}
-`;
+    message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}\n`;
   }
   ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   res.sendStatus(200);
